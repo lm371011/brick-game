@@ -59,6 +59,8 @@
     <h2>🏆 순위표 (10등까지)</h2>
     <ol id="rank"></ol>
     <p id="boardMsg">불러오는 중…</p>
+    <button id="cheatBtn" style="margin-top:10px;padding:8px 14px;font-size:14px;background:#7f1d1d;color:#fecaca">[시험용] 치트: 50000점</button>
+    <p id="cheatMsg" style="font-size:14px;color:#fca5a5;margin:6px 0 0"></p>
   </div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
@@ -115,6 +117,21 @@ async function sendScore() {
   }
 }
 sendBtn.addEventListener('click', sendScore);
+
+// [시험용] 표의 점수 제한(0~10000점)이 잘 막는지 확인
+const cheatMsg = document.getElementById('cheatMsg');
+document.getElementById('cheatBtn').addEventListener('click', async () => {
+  if (!db) { cheatMsg.textContent = '시험 실패: supabase-js를 불러오지 못했습니다.'; return; }
+  cheatMsg.textContent = '50000점 올리는 중…';
+  try {
+    const { error } = await db.from('scores').insert({ nickname: '치트', score: 50000 });
+    if (error) throw error;
+    cheatMsg.textContent = '⚠️ 표가 50000점을 받아들였습니다. 점수 제한(check)이 빠졌는지 확인하세요.';
+    loadBoard();
+  } catch (e) {
+    cheatMsg.textContent = '표가 거절함(정상): ' + (e.message || e) + (e.code ? ' [코드 ' + e.code + ']' : '');
+  }
+});
 nickEl.addEventListener('keydown', e => { if (e.key === 'Enter') sendScore(); });
 
 const ROWS = 5, COLS = 10, BW = 48, BH = 36, GAP = 6, TOP = 36;
