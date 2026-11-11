@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>벽돌깨기</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; background: #111827; color: #f3f4f6; padding: 10px;
+    font-family: system-ui, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
+  #hud { width: 100%; max-width: 600px; display: flex; justify-content: space-between; align-items: center;
+    font-size: 18px; margin-bottom: 8px; }
+  #hud b { color: #60a5fa; }
+  #box { position: relative; width: 100%; max-width: 600px; }
+  canvas { display: block; width: 100%; background: #1f2937; border-radius: 10px; touch-action: none; }
+  #panel { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; background: rgba(0,0,0,.6); border-radius: 10px; text-align: center; }
+  .hide { display: none !important; }
+  #panel h1 { margin: 0 0 10px; font-size: 32px; }
+  #panel p { margin: 4px 0; font-size: 17px; }
+  button { margin-top: 16px; padding: 12px 32px; font-size: 18px; font-weight: bold; border: 0;
+    border-radius: 8px; background: #60a5fa; color: #0b1220; cursor: pointer; }
+  #pause { margin: 0; padding: 6px 14px; font-size: 15px; background: #374151; color: #f3f4f6; }
+  #pause:disabled { opacity: .4; cursor: default; }
+</style>
+</head>
+<body>
+  <div id="hud">
+    <span>점수 <b id="score">0</b></span>
+    <button id="pause" disabled>일시정지</button>
+    <span>목숨 <b id="lives">3</b></span>
+  </div>
+  <div id="box">
+    <canvas id="cv" width="600" height="450"></canvas>
+    <div id="panel">
+      <h1 id="title">벽돌깨기</h1>
+      <p id="info">← → 키, 마우스, 손가락으로 막대를 움직이세요</p>
+      <p id="best">아이템: <span style="color:#facc15">● 공 3개</span> · <span style="color:#4ade80">↔ 막대 확장</span></p>
+      <button id="btn">시작</button>
+    </div>
+  </div>
+<script>
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+const panel = document.getElementById('panel'), btn = document.getElementById('btn');
+const pauseBtn = document.getElementById('pause');
+const titleEl = document.getElementById('title'), infoEl = document.getElementById('info');
+const bestEl = document.getElementById('best');
+
+const ROWS = 5, COLS = 10, BW = 48, BH = 36, GAP = 6, TOP = 36;
+const LEFT = (W - (COLS * BW + (COLS - 1) * GAP)) / 2;
+const COLORS = ['#fde68a', '#fecaca', '#bbf7d0', '#bfdbfe', '#e9d5ff']; // 줄별 파스텔 배경
+// 맨 윗줄은 별, 나머지 줄은 동물을 무작위로 배치
+const STARS = ['⭐', '🌟', '✨'];
+const ANIMALS = ['🐶', '🐱', '🐰', '🐻', '🐼', '🐨', '🐯', '🦁', '🐸', '🐷', '🐵', '🐥', '🦄', '🐧', '🐹', '🦊'];
+if (!ctx.roundRect) ctx.roundRect = function (x, y, w, h) { this.rect(x, y, w, h); }; // 옛 브라우저 대비
+const pick = arr =>arr[Math.floor(Math.random() * arr.length)];
+const SPEED = 5, PADDLE_W = 100, WIDE_W = 130, WIDE_FRAMES = 600; // 확장: 약 10초(60프레임/초)
+const DROP_RATE = 0.2;                                           // 벽돌 하나당 아이템 확률 20%
+
+let bricks, paddle, balls, drops, score, lives, moving, over, paused, keys = {};
+
+// 오늘 최고 점수: 날짜별로 저장 (저장이 막힌 환경이면 메모리에만 보관)
+const todayKey = 'best_' + new Date().toISOString().slice(0, 10);
+let todayBest = 0;
+try { todayBest = Number(localStorage.getItem(todayKey)) || 0; } catch (e) {}
+
+function reset() {
+  bricks = [];
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      bricks.push({ x: LEFT + c * (BW + GAP), y: TOP + r * (BH + GAP), color: COLORS[r],
+                    icon: r === 0 ? pick(STARS) : pick(ANIMALS) });
+  paddle = { x: W / 2 - PADDLE_W / 2, y: H - 30, w: PADDLE_W, h: 12, wide: 0 };
+  score = 0; lives = 3; over = false;
+  placeBall();
+  hud();
+}
+
+function placeBall() {
+  balls = [{ x: paddle.x + paddle.w / 2, y: paddle.y - 8, r: 8, dx: 0, dy: 0 }];
+  drops = [];
+  setWidth(PADDLE_W); paddle.wide = 0;
+  moving = false; paused = false;
+  pauseBtn.disabled = true; pauseBtn.textContent = '일시정지';
+}
+
+function setWidth(w) {           // 가운데를 유지한 채 막대 길이 변경
+  const cx = paddle.x + paddle.w / 2;
+  paddle.w = w;
+  paddle.x = Math.max(0, Math.min(W - w, cx - w / 2));
+}
+
+function hud() {
+  document.getElementById('score').textContent = score;
+  document.getElementById('lives').textContent = lives;
+}
+
+function launch() {
+  const ang = (Math.random() * 60 - 30) * Math.PI / 180;
+  balls[0].dx = SPEED * Math.sin(ang);
+  balls[0].dy = -SPEED * Math.cos(ang);
+  moving = true; paused = false;
+  pauseBtn.disabled = false; pauseBtn.textContent = '일시정지';
+}
+
+function togglePause() {
+  if (!moving || over) return;
+  paused = !paused;
+  pauseBtn.textContent = paused ? '계속하기' : '일시정지';
+}
+
+function endGame(win) {
+  over = true; moving = false; pauseBtn.disabled = true;
+  if (score > todayBest) {
+    todayBest = score;
+    try { localStorage.setItem(todayKey, todayBest); } catch (e) {}
+  }
+  titleEl.textContent = '게임 끝';
+  infoEl.textContent = (win ? '벽돌을 모두 깼어요! ' : '') + '점수: ' + score + '점';
+  bestEl.textContent = '오늘 최고 점수: ' + todayBest + '점';
+  btn.textContent = '다시 하기';
+  panel.classList.remove('hide');
+}
+
+function getItem(type) {
+  if (type === 'wide') {
+    setWidth(WIDE_W); paddle.wide = WIDE_FRAMES;    // 다시 먹으면 시간만 새로 채움
+  } else {
+    const src = balls[0];
+    while (balls.length < 3) {                      // 공을 3개로 맞춤
+      const ang = (balls.length === 1 ? -30 : 30) * Math.PI / 180;
+      balls.push({ x: src.x, y: src.y, r: 8, dx: SPEED * Math.sin(ang), dy: -SPEED * Math.cos(ang) });
+    }
+  }
+}
+
+function moveBall(ball) {
+  ball.x += ball.dx; ball.y += ball.dy;
+
+  // 벽
+  if (ball.x < ball.r) { ball.x = ball.r; ball.dx = Math.abs(ball.dx); }
+  if (ball.x > W - ball.r) { ball.x = W - ball.r; ball.dx = -Math.abs(ball.dx); }
+  if (ball.y < ball.r) { ball.y = ball.r; ball.dy = Math.abs(ball.dy); }
+
+  // 막대: 맞은 위치에 따라 튀는 각도가 달라짐
+  if (ball.dy > 0 && ball.y + ball.r >= paddle.y && ball.y + ball.r <= paddle.y + paddle.h + 6 &&
+      ball.x >= paddle.x - ball.r && ball.x <= paddle.x + paddle.w + ball.r) {
+    const hit = (ball.x - (paddle.x + paddle.w / 2)) / (paddle.w / 2);
+    const ang = Math.max(-1, Math.min(1, hit)) * 60 * Math.PI / 180;
+    ball.dx = SPEED * Math.sin(ang);
+    ball.dy = -SPEED * Math.cos(ang);
+    ball.y = paddle.y - ball.r;
+  }
+
+  // 벽돌
+  for (let i = 0; i < bricks.length; i++) {
+    const b = bricks[i];
+    if (ball.x + ball.r > b.x && ball.x - ball.r < b.x + BW &&
+        ball.y + ball.r > b.y && ball.y - ball.r < b.y + BH) {
+      const ox = Math.min(ball.x + ball.r - b.x, b.x + BW - (ball.x - ball.r));
+      const oy = Math.min(ball.y + ball.r - b.y, b.y + BH - (ball.y - ball.r));
+      if (ox < oy) ball.dx = -ball.dx; else ball.dy = -ball.dy;
+      bricks.splice(i, 1);
+      score += 10; hud();
+      if (Math.random() < DROP_RATE)
+        drops.push({ x: b.x + BW / 2, y: b.y + BH / 2, type: Math.random() < 0.5 ? 'multi' : 'wide' });
+      break;
+    }
+  }
+}
+
+function update() {
+  if (keys.ArrowLeft) paddle.x -= 8;
+  if (keys.ArrowRight) paddle.x += 8;
+  paddle.x = Math.max(0, Math.min(W - paddle.w, paddle.x));
+
+  if (!moving) {               // 시작 전에는 공이 막대 위에 붙어 있음
+    balls[0].x = paddle.x + paddle.w / 2;
+    balls[0].y = paddle.y - balls[0].r;
+    return;
+  }
+
+  balls.forEach(moveBall);
+  if (bricks.length === 0) { endGame(true); return; }
+
+  // 막대 확장 시간 줄이기
+  if (paddle.wide > 0 && --paddle.wide === 0) setWidth(PADDLE_W);
+
+  // 떨어지는 아이템
+  for (const d of drops) {
+    d.y += 2.5;
+    if (d.y + 10 >= paddle.y && d.y - 10 <= paddle.y + paddle.h &&
+        d.x >= paddle.x && d.x <= paddle.x + paddle.w) { d.got = true; getItem(d.type); }
+  }
+  drops = drops.filter(d => !d.got && d.y < H + 20);
+
+  // 모든 공을 놓쳤을 때만 목숨 감소
+  balls = balls.filter(b => b.y - b.r <= H);
+  if (balls.length === 0) {
+    lives--; hud();
+    if (lives <= 0) endGame(false);
+    else {
+      placeBall();
+      titleEl.textContent = '공을 놓쳤어요';
+      infoEl.textContent = '남은 목숨: ' + lives;
+      bestEl.textContent = '';
+      btn.textContent = '시작';
+      panel.classList.remove('hide');
+    }
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = '28px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+  for (const b of bricks) {
+    ctx.fillStyle = b.color;                       // 둥근 배경
+    ctx.beginPath(); ctx.roundRect(b.x, b.y, BW, BH, 12); ctx.fill();
+    ctx.fillText(b.icon, b.x + BW / 2, b.y + BH / 2 + 2);
+  }
+
+  ctx.font = 'bold 14px sans-serif';
+  for (const d of drops) {
+    ctx.fillStyle = d.type === 'multi' ? '#facc15' : '#4ade80';
+    ctx.fillRect(d.x - 14, d.y - 9, 28, 18);
+    ctx.fillStyle = '#111827';
+    ctx.fillText(d.type === 'multi' ? '●' : '↔', d.x, d.y + 1);
+  }
+
+  ctx.fillStyle = paddle.wide > 0 ? '#4ade80' : '#93c5fd';
+  ctx.fillRect(paddle.x, paddle.y, paddle.w, paddle.h);
+  ctx.fillStyle = '#ffffff';
+  for (const b of balls) { ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2); ctx.fill(); }
+
+  if (paused) {
+    ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 30px sans-serif';
+    ctx.fillText('일시정지', W / 2, H / 2);
+  }
+}
+
+function loop() {
+  if (!over && !paused) update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// 마우스·손가락: 화면 좌표를 캔버스 좌표로 바꿔 막대 이동
+function moveTo(clientX) {
+  if (paused) return;
+  const rect = cv.getBoundingClientRect();
+  const x = (clientX - rect.left) * (W / rect.width);
+  paddle.x = Math.max(0, Math.min(W - paddle.w, x - paddle.w / 2));
+}
+cv.addEventListener('mousemove', e => moveTo(e.clientX));
+cv.addEventListener('touchstart', e => { e.preventDefault(); moveTo(e.touches[0].clientX); }, { passive: false });
+cv.addEventListener('touchmove', e => { e.preventDefault(); moveTo(e.touches[0].clientX); }, { passive: false });
+
+window.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); keys[e.key] = true; }
+  if (e.key === 'p' || e.key === 'P' || e.key === 'ㅔ') togglePause();
+});
+window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+pauseBtn.addEventListener('click', togglePause);
+btn.addEventListener('click', () => {
+  if (over) reset();
+  panel.classList.add('hide');
+  launch();
+});
+
+reset();
+loop();
+</script>
+</body>
+</html>
