@@ -29,7 +29,7 @@
   <div id="hud">
     <span>점수 <b id="score">0</b></span>
     <button id="pause" disabled>일시정지</button>
-    <span>목숨 <b id="lives">3</b></span>
+    <span>목숨 <b id="lives">5</b></span>
   </div>
   <div id="box">
     <canvas id="cv" width="600" height="450"></canvas>
@@ -73,7 +73,7 @@ function reset() {
       bricks.push({ x: LEFT + c * (BW + GAP), y: TOP + r * (BH + GAP), color: COLORS[r],
                     icon: r === 0 ? pick(STARS) : pick(ANIMALS) });
   paddle = { x: W / 2 - PADDLE_W / 2, y: H - 30, w: PADDLE_W, h: 12, wide: 0 };
-  score = 0; lives = 3; over = false;
+  score = 0; lives = 5; over = false;
   placeBall();
   hud();
 }
